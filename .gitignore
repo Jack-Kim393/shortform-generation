@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+
+# OS-specific
+.DS_Store
+
+# Project output
+output/
+thumbnail/
+
+# IDE/Editor
+.vscode/
+.idea/
