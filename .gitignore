@@ -18,3 +18,8 @@ thumbnail/
 # IDE/Editor
 .vscode/
 .idea/
+
+# PyInstaller
+*.spec
+build/
+dist/
