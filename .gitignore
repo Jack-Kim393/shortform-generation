@@ -13,6 +13,7 @@ venv/
 # Project output
 output/
 thumbnail/
+*.mp4
 
 # IDE/Editor
 .vscode/
