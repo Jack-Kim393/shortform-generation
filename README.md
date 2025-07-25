@@ -77,6 +77,14 @@
 4.  **"Generate Video"** 버튼을 클릭하여 비디오 생성을 시작합니다.
 5.  비디오 생성이 완료되면 미리보기와 함께 **"Download Video"** 버튼이 나타납니다. 이 버튼을 클릭하여 생성된 MP4 파일을 다운로드할 수 있습니다.
 
+### 비디오 설정
+
+애플리케이션에서 다음 비디오 설정을 조정할 수 있습니다:
+
+*   **Total Video Duration (seconds):** 최종 비디오의 총 길이를 설정합니다. (기본값: 15초, 범위: 10초 ~ 20초)
+*   **Select Transition Duration (Ease in and out):** 이미지 간 전환 효과의 길이를 밀리초(ms) 단위로 설정합니다. (기본값: 500ms)
+*   **MP3 Extraction Start Time (seconds):** 업로드된 MP3 파일에서 오디오를 추출할 시작 시간을 초 단위로 설정합니다. (기본값: 40초)
+
 ## 출력 파일
 
 생성된 비디오 파일은 프로젝트 루트 디렉토리 내의 `output/` 폴더에 `shortform_video.mp4`로 저장됩니다.
