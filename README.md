@@ -80,23 +80,38 @@ Windows: start.bat 파일 더블클릭
 생성이 완료되면 영상 미리보기와 함께 "Download Video" 버튼이 활성화됩니다.
 
 📁 프로젝트 구조 (Project Structure)
+프로젝트의 전체 폴더 및 파일 구조는 다음과 같습니다.
+
 shortform-generation-image/
 ├── .gitignore
-├── app.py                  # Streamlit 애플리케이션 메인 코드
-├── requirements.txt        # 필요한 Python 라이브러리 목록
-├── start.bat               # Windows 실행 스크립트
-├── start.command           # macOS/Linux 실행 스크립트
-├── output/                 # 생성된 비디오가 저장되는 폴더
+├── app.py
+├── requirements.txt
+├── start.bat
+├── start.command
+├── output/
 │   └── shortform_video.mp4
-├── thumbnail/              # 생성된 썸네일이 저장되는 폴더
+├── thumbnail/
 │   └── thumbnail.png
-└── venv/                   # Python 가상 환경 폴더
+└── venv/
+app.py: Streamlit 애플리케이션의 메인 파이썬 코드입니다.
+
+requirements.txt: 프로젝트 실행에 필요한 라이브러리 목록입니다.
+
+start.bat: Windows 사용자를 위한 간편 실행 스크립트입니다.
+
+start.command: macOS 및 Linux 사용자를 위한 간편 실행 스크립트입니다.
+
+output/: 생성된 최종 비디오 파일(shortform_video.mp4)이 저장되는 폴더입니다.
+
+thumbnail/: 생성된 썸네일 이미지(thumbnail.png)가 저장되는 폴더입니다.
+
+venv/: 파이썬 가상 환경 폴더입니다.
 
 🛠️ 주요 의존성 (Key Dependencies)
-Streamlit: 웹 애플리케이션 인터페이스 구축
+이 프로젝트는 다음의 핵심 라이브러리를 사용하여 구현되었습니다.
 
-Moviepy: 비디오 클립 생성, 편집 및 렌더링
-
-Pillow (PIL): 이미지 리사이징 및 처리
-
-Numpy: 이미지 데이터를 Moviepy가 인식하는 배열 형태로 변환
+라이브러리 (Library)	역할 (Role)
+Streamlit	사용자 친화적인 웹 애플리케이션 인터페이스를 구축합니다.
+Moviepy	이미지와 오디오를 결합하고, 전환 효과를 적용하여 최종 비디오를 생성 및 렌더링합니다.
+Pillow (PIL)	업로드된 이미지의 비율을 유지하며 크기를 조절하고 배경을 추가하는 등 이미지 처리를 담당합니다.
+Numpy	처리된 이미지 데이터를 Moviepy가 비디오 클립으로 인식할 수 있는 숫자 배열 형태로 변환합니다.
