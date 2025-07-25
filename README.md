@@ -91,6 +91,7 @@ shortform-generation-image/
 ├── thumbnail/              # 생성된 썸네일이 저장되는 폴더
 │   └── thumbnail.png
 └── venv/                   # Python 가상 환경 폴더
+
 🛠️ 주요 의존성 (Key Dependencies)
 Streamlit: 웹 애플리케이션 인터페이스 구축
 
