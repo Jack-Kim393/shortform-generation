@@ -1,238 +1,217 @@
 import os
 import streamlit as st
-from moviepy.editor import *
-from PIL import Image
-import numpy as np
 from pathlib import Path
 import tempfile
-import shutil
+import uuid
+import subprocess
 
-# Define paths
-base_dir = "/Users/kakaoent/Desktop/my-mac-project/shortform-generation-image"
-output_dir = os.path.join(base_dir, "output")
-thumbnail_dir = os.path.join(base_dir, "thumbnail")
+# --- 1. 경로 및 기본 설정 ---
+st.set_page_config(page_title="Short-form Video Generator", layout="centered")
 
-# Create directories if they don't exist
-os.makedirs(output_dir, exist_ok=True)
-os.makedirs(thumbnail_dir, exist_ok=True)
+# 임시 파일 및 출력 디렉토리 설정
+try:
+    script_dir = Path(__file__).parent
+except NameError:
+    script_dir = Path.cwd()
 
-def resize_and_pad(img_path, output_size=(1080, 1920)):
+output_dir = script_dir / "output"
+output_dir.mkdir(exist_ok=True)
+
+
+# --- 2. 핵심 기능 함수 ---
+def generate_video_with_subprocess(image_paths, mp3_path, output_path, video_duration, transition_duration, mp3_start_time):
     """
-    Resizes an image to fit within the output size while maintaining aspect ratio,
-    padding the remaining space with a black background. This is a "fit" or "contain" operation.
-    It calculates the scale required for both dimensions and uses the smaller scale
-    to ensure the whole image fits without cropping.
+    [핵심 수정] 3단계 접근법으로 비디오를 안정적으로 생성하는 함수
+    1. 무음 비디오 생성 -> 2. 오디오 트랙 생성 -> 3. 비디오와 오디오 결합
     """
-    target_w, target_h = output_size
+    num_images = len(image_paths)
+    if num_images < 2:
+        st.error("오류: 이미지는 2개 이상 필요합니다.")
+        return False
 
-    try:
-        img = Image.open(img_path).convert("RGB")
-    except Exception as e:
-        print(f"Error opening image {img_path}: {e}")
-        return np.zeros((target_h, target_w, 3), dtype=np.uint8)
-
-    img_w, img_h = img.size
-    if img_w == 0 or img_h == 0:
-        return np.zeros((target_h, target_w, 3), dtype=np.uint8)
-
-    # Calculate scaling factors for width and height
-    scale_w = target_w / img_w
-    scale_h = target_h / img_h
-
-    # Choose the smaller scaling factor to ensure the image fits without cropping
-    scale = min(scale_w, scale_h)
-
-    # Calculate the new dimensions
-    new_w = int(img_w * scale)
-    new_h = int(img_h * scale)
-
-    # Resize the image using the calculated dimensions
-    img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-    # Create a new image with a black background
-    background = Image.new("RGB", output_size, (0, 0, 0))
-
-    # Calculate position to paste the resized image onto the center of the background
-    paste_x = (target_w - new_w) // 2
-    paste_y = (target_h - new_h) // 2
-
-    # Paste the resized image
-    background.paste(img_resized, (paste_x, paste_y))
-
-    return np.array(background)
-
-st.title("Short-form Video Generator")
-
-# File Uploaders
-uploaded_images = st.file_uploader(
-    "Upload Images (PNG, JPG, JPEG) - At least 2 images required", 
-    type=["png", "jpg", "jpeg"], 
-    accept_multiple_files=True
-)
-uploaded_mp3 = st.file_uploader(
-    "Upload MP3 File - At least 55 seconds long", 
-    type=["mp3"]
-)
-
-# Video Settings
-st.subheader("Video Settings")
-
-video_duration_sec = st.slider(
-    "Total Video Duration (seconds)",
-    min_value=10,
-    max_value=20,
-    value=15,
-    step=1
-)
-
-transition_duration_ms = st.selectbox(
-    "Select Transition Duration (Ease in and out)",
-    options=[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
-    index=4, # Default to 500ms
-    format_func=lambda x: f"{x}ms"
-)
-transition_duration_sec = transition_duration_ms / 1000.0
-
-mp3_start_time = st.number_input(
-    "MP3 Extraction Start Time (seconds)",
-    min_value=0,
-    value=40,
-    step=1
-)
-
-# MP3 Preview Button
-if uploaded_mp3 and st.button("Preview MP3 Segment"):
     with tempfile.TemporaryDirectory() as temp_dir:
-        temp_mp3_path = os.path.join(temp_dir, uploaded_mp3.name)
-        with open(temp_mp3_path, "wb") as f:
-            f.write(uploaded_mp3.getbuffer())
+        temp_dir_path = Path(temp_dir)
+        silent_video_path = temp_dir_path / "silent_video.mp4"
+        final_audio_path = temp_dir_path / "final_audio.aac"
 
         try:
-            audio_clip = AudioFileClip(temp_mp3_path)
-            if mp3_start_time + video_duration_sec > audio_clip.duration:
-                st.warning(f"MP3 segment ({video_duration_sec}s from {mp3_start_time}s) exceeds audio duration ({audio_clip.duration:.2f}s). Playing available portion.")
-                preview_end_time = audio_clip.duration
-            else:
-                preview_end_time = mp3_start_time + video_duration_sec
-
-            preview_clip = audio_clip.subclip(mp3_start_time, preview_end_time)
+            # --- 1단계: 무음 비디오 생성 ---
+            filter_complex_video = ""
+            for i, img_path in enumerate(image_paths):
+                filter_complex_video += f"[{i}:v]settb=AVTB,fps=24,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1:color=black[v{i}];"
             
-            temp_preview_path = os.path.join(temp_dir, "preview_audio.mp3")
-            preview_clip.write_audiofile(temp_preview_path, verbose=False, logger=None)
+            clip_duration = (video_duration + (num_images - 1) * transition_duration) / num_images
+            prev_stream = "[v0]"
+            for i in range(1, num_images):
+                offset = i * (clip_duration - transition_duration)
+                out_stream_name = "[video_out]" if i == num_images - 1 else f"[vt{i}]"
+                filter_complex_video += f"{prev_stream}[v{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}{out_stream_name};"
+                prev_stream = out_stream_name
+
+            cmd_video = ['ffmpeg', '-y']
+            for img_path in image_paths:
+                cmd_video.extend(['-loop', '1', '-i', img_path])
+            cmd_video.extend([
+                '-filter_complex', filter_complex_video,
+                '-map', '[video_out]',
+                '-t', str(video_duration),
+                '-vcodec', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-preset', 'veryfast',
+                str(silent_video_path)
+            ])
+            subprocess.run(cmd_video, check=True, capture_output=True, text=True, encoding='utf-8')
+
+            # --- 2단계: 오디오 트랙 생성 ---
+            cmd_audio = [
+                'ffmpeg', '-y',
+                '-i', mp3_path,
+                '-ss', str(mp3_start_time),
+                '-t', str(video_duration),
+                '-acodec', 'aac',
+                '-ar', '44100',
+                '-b:a', '192k',
+                str(final_audio_path)
+            ]
+            subprocess.run(cmd_audio, check=True, capture_output=True, text=True, encoding='utf-8')
+
+            # --- 3단계: 무음 비디오와 오디오 결합 ---
+            cmd_combine = [
+                'ffmpeg', '-y',
+                '-i', str(silent_video_path),
+                '-i', str(final_audio_path),
+                '-c:v', 'copy',  # 비디오는 재인코딩 없이 복사
+                '-c:a', 'copy',  # 오디오도 재인코딩 없이 복사
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                str(output_path)
+            ]
+            subprocess.run(cmd_combine, check=True, capture_output=True, text=True, encoding='utf-8')
             
-            st.audio(temp_preview_path, format='audio/mp3')
+            return True
 
-        except Exception as e:
-            st.error(f"Error during MP3 preview: {e}")
+        except subprocess.CalledProcessError as e:
+            st.error("영상 생성 중 FFmpeg 오류가 발생했습니다.")
+            st.code(e.stderr) # 에러 로그를 직접 보여줌
+            return False
 
-def generate_video_process(uploaded_images, uploaded_mp3, transition_duration_sec, mp3_start_time, video_duration_sec):
-    # --- Validation Checks ---
-    if not uploaded_images:
-        st.error("Error: Please upload at least 2 images.")
-        return
-    elif len(uploaded_images) < 2:
-        st.error("Error: At least 2 images are required.")
-        return
-    elif not uploaded_mp3:
-        st.error("Error: Please upload an MP3 file.")
-        return
-    else:
-        # Create a temporary directory for uploaded files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            image_paths = []
-            for uploaded_file in uploaded_images:
-                # Save uploaded image to a temporary file
-                temp_image_path = os.path.join(temp_dir, uploaded_file.name)
-                with open(temp_image_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                image_paths.append(temp_image_path)
+
+# --- 3. Streamlit UI 구성 ---
+st.title("🏞️ 숏폼 영상 자동 생성기")
+
+if 'video_path' not in st.session_state:
+    st.session_state.video_path = None
+if 'thumbnail_path' not in st.session_state:
+    st.session_state.thumbnail_path = None
+if 'run_id' not in st.session_state:
+    st.session_state.run_id = str(uuid.uuid4())
+
+with st.expander("사용법 보기 👀"):
+    st.write("이미지(2개 이상)와 MP3 파일을 업로드하고 설정을 맞춘 뒤 '영상 생성하기' 버튼을 누르세요.")
+
+st.header("1. 파일 업로드")
+uploaded_images = st.file_uploader(
+    "이미지를 2개 이상 업로드하세요.", type=["png", "jpg", "jpeg"], accept_multiple_files=True
+)
+uploaded_mp3 = st.file_uploader(
+    "배경 음악(MP3)을 업로드하세요.", type=["mp3"]
+)
+
+st.header("2. 영상 설정")
+video_duration_sec = st.slider(
+    "전체 영상 길이 (초)", min_value=5, max_value=60, value=15, step=1
+)
+transition_duration_sec = st.slider(
+    "화면 전환 효과 시간 (초)", min_value=0.1, max_value=2.0, value=0.5, step=0.1
+)
+mp3_start_time = st.number_input(
+    "음악 시작 위치 (초)", min_value=0, value=15, step=1
+)
+
+if uploaded_mp3:
+    if st.button("🎧 설정된 음악 구간 미리듣기"):
+        with st.spinner("미리듣기 생성 중..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_in, \
+                 tempfile.NamedTemporaryFile(delete=False, suffix="_preview.mp3") as temp_out:
+                
+                temp_in.write(uploaded_mp3.getbuffer())
+                input_path = temp_in.name
+                output_path = temp_out.name
             
-            # Save uploaded MP3 to a temporary file
-            temp_mp3_path = os.path.join(temp_dir, uploaded_mp3.name)
-            with open(temp_mp3_path, "wb") as f:
-                f.write(uploaded_mp3.getbuffer())
-
             try:
-                audio_clip = AudioFileClip(temp_mp3_path)
+                command = [
+                    'ffmpeg', '-y',
+                    '-i', input_path,
+                    '-ss', str(mp3_start_time),
+                    '-t', str(video_duration_sec),
+                    output_path
+                ]
+                subprocess.run(command, check=True, capture_output=True)
+                st.audio(output_path)
+            except subprocess.CalledProcessError as e:
+                st.error("미리듣기 생성에 실패했습니다.")
+                st.code(e.stderr)
+            finally:
+                if os.path.exists(input_path): os.remove(input_path)
+                if os.path.exists(output_path): os.remove(output_path)
+
+st.header("3. 영상 생성")
+if st.button("🚀 영상 생성하기!"):
+    if uploaded_images and uploaded_mp3 and len(uploaded_images) >= 2:
+        with st.spinner('영상을 생성 중입니다... 잠시만 기다려주세요.'):
+            # 파일을 임시 디렉토리에 저장하지 않고 바로 BytesIO로 처리 시도
+            with tempfile.TemporaryDirectory() as temp_dir:
+                image_paths = []
+                for file in uploaded_images:
+                    unique_name = f"{uuid.uuid4().hex}_{file.name}"
+                    img_path = Path(temp_dir) / unique_name
+                    img_path.write_bytes(file.getbuffer())
+                    image_paths.append(str(img_path))
                 
-                # Validate MP3 duration and start time
-                if audio_clip.duration < video_duration_sec:
-                    st.error(f"Error: The MP3 file must be at least {video_duration_sec} seconds long to match video duration.")
-                    return # Stop execution
-                
-                if mp3_start_time + video_duration_sec > audio_clip.duration:
-                    st.error(f"Error: MP3 segment ({video_duration_sec}s from {mp3_start_time}s) exceeds audio duration ({audio_clip.duration:.2f}s). Please adjust start time.")
-                    return # Stop execution
+                mp3_path = Path(temp_dir) / "audio.mp3"
+                mp3_path.write_bytes(uploaded_mp3.getbuffer())
 
-                st.success("Validation passed! Starting video generation...")
+                run_id = str(uuid.uuid4())
+                st.session_state.run_id = run_id
+                video_output_path = output_dir / f"video_{run_id}.mp4"
+                thumb_output_path = output_dir / f"thumb_{run_id}.png"
 
-                # --- Thumbnail Generation ---
-                thumbnail_path = os.path.join(thumbnail_dir, "thumbnail.png")
-                first_img_path = image_paths[0]
-                
-                try:
-                    # Use the same padding logic for the thumbnail
-                    thumb_np_array = resize_and_pad(first_img_path, output_size=(1080, 1920))
-                    thumbnail_img = Image.fromarray(thumb_np_array)
-                    thumbnail_img.save(thumbnail_path)
-                    st.image(thumbnail_path, caption="Generated Thumbnail")
-                except Exception as e:
-                    st.error(f"Error generating thumbnail: {e}")
+                success = generate_video_with_subprocess(
+                    image_paths, str(mp3_path), video_output_path,
+                    video_duration_sec, transition_duration_sec, mp3_start_time
+                )
 
+                if success:
+                    subprocess.run([
+                        'ffmpeg', '-y', '-i', str(video_output_path),
+                        '-vframes', '1', str(thumb_output_path)
+                    ], check=True, capture_output=True, text=True)
+                    st.success("영상 생성 완료!")
+                    st.session_state.video_path = str(video_output_path)
+                    st.session_state.thumbnail_path = str(thumb_output_path)
+                else:
+                    st.session_state.video_path = None
+                    st.session_state.thumbnail_path = None
+    else:
+        st.warning("이미지(2개 이상)와 MP3 파일을 모두 업로드해주세요.")
 
-                # --- Video Composition ---
-                clips = []
-                
-                # Repeat images if less than 10
-                while len(image_paths) < 10:
-                    image_paths.extend(image_paths)
-                image_paths = image_paths[:10]
-
-                # Calculate individual image clip duration based on total video duration
-                image_clip_duration = video_duration_sec / len(image_paths)
-
-                for img_path in image_paths:
-                    processed_img = resize_and_pad(img_path)
-                    clips.append(ImageClip(processed_img).set_duration(image_clip_duration))
-
-                # --- Transitions ---
-                final_clips = [clips[0]]
-                for i in range(len(clips) - 1):
-                    # Use selected transition duration
-                    final_clips.append(CompositeVideoClip([
-                        clips[i+1].set_start(transition_duration_sec).crossfadein(transition_duration_sec),
-                        clips[i].set_end(transition_duration_sec)
-                    ]).set_duration(image_clip_duration))
-
-
-                video = concatenate_videoclips(final_clips, method="compose")
-                
-                # --- Audio ---
-                final_audio = audio_clip.subclip(mp3_start_time, mp3_start_time + video_duration_sec)
-                video = video.set_audio(final_audio)
-
-                # --- Export Video ---
-                output_filename = "shortform_video.mp4"
-                output_path = os.path.join(output_dir, output_filename)
-                video.write_videofile(output_path, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True, fps=24)
-
-                st.success(f"Video generated successfully! Saved to: {output_path}")
-                st.video(output_path)
-
-                # --- Download Button ---
-                with open(output_path, "rb") as file:
-                    st.download_button(
-                        label="Download Video",
-                        data=file,
-                        file_name=output_filename,
-                        mime="video/mp4"
-                    )
-
-            except Exception as e:
-                st.error(f"An error occurred during video generation: {e}")
-
-        # Temporary directory and its contents are automatically cleaned up here
-
-
-if st.button("Generate Video"):
-    generate_video_process(uploaded_images, uploaded_mp3, transition_duration_sec, mp3_start_time, video_duration_sec)
+if st.session_state.video_path and st.session_state.thumbnail_path:
+    st.header("4. 결과 확인 및 다운로드")
+    if Path(st.session_state.video_path).exists() and Path(st.session_state.thumbnail_path).exists():
+        st.image(st.session_state.thumbnail_path, caption="생성된 썸네일")
+        with open(st.session_state.thumbnail_path, "rb") as f:
+            st.download_button(
+                "썸네일 이미지 다운로드", data=f.read(),
+                file_name=f"thumbnail_{st.session_state.run_id}.png", mime="image/png"
+            )
+        st.markdown("---")
+        st.video(st.session_state.video_path)
+        with open(st.session_state.video_path, "rb") as f:
+            st.download_button(
+                "영상 다운로드", data=f.read(),
+                file_name=f"video_{st.session_state.run_id}.mp4", mime="video/mp4"
+            )
+    else:
+        st.error("생성된 파일을 찾을 수 없습니다. 다시 생성해주세요.")
+        st.session_state.video_path = None
+        st.session_state.thumbnail_path = None
