@@ -94,3 +94,52 @@
 ### 1. 공통 준비
 
 먼저 프로젝트 폴더 구조를 아래와 같이 준비합니다.
+shortform-generation/
+├── libs/
+│   └── streamlit_sortables-0.3.1-py3-none-any.whl
+├── app.py
+└── requirements.txt
+* `app.py`와 `requirements.txt`는 최종 버전으로 준비합니다.
+* `libs` 폴더를 만들고, 이전에 다운로드한 `streamlit_sortables...whl` 파일을 그 안에 넣습니다.
+
+### 2. Windows용 `.exe` 만들기
+
+**Windows PC에서 진행해야 합니다.**
+
+1.  **FFmpeg 준비**: [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)에서 `essentials` 버전 `.zip` 파일을 받아 압축을 풀고, `bin` 폴더 안의 **`ffmpeg.exe`** 파일을 프로젝트 루트 폴더(`app.py`가 있는 곳)에 복사합니다.
+
+2.  **빌드 실행**: 터미널에서 아래 명령어들을 순서대로 실행합니다.
+    ```bash
+    # 가상 환경 생성 및 활성화, 라이브러리 설치
+    python -m venv venv
+    .\venv\Scripts\activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    pip install pyinstaller
+
+    # PyInstaller로 빌드 실행
+    pyinstaller --noconfirm --onefile --windowed --name "ShortformVideoGenerator" --add-data "venv\Lib\site-packages\streamlit\frontend;streamlit\frontend" --add-binary "ffmpeg.exe;." app.py
+    ```
+
+3.  **결과**: `dist` 폴더 안에 `ShortformVideoGenerator.exe` 파일이 생성됩니다.
+
+### 3. macOS용 `.app` 만들기
+
+**Mac에서 진행해야 합니다.**
+
+1.  **FFmpeg 준비**: [ffmpeg.org](https://ffmpeg.org/download.html) 등에서 macOS용 `Static build`를 다운로드하여, 압축 푼 폴더 안의 **`ffmpeg`** 파일(확장자 없음)을 프로젝트 루트 폴더에 복사합니다.
+
+2.  **빌드 실행**: Mac의 터미널에서 아래 명령어들을 순서대로 실행합니다.
+    ```bash
+    # 가상 환경 생성 및 활성화, 라이브러리 설치
+    python3 -m venv venv
+    source ven/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    pip install pyinstaller
+
+    # PyInstaller로 빌드 실행 (macOS에서는 경로 구분자가 ':' 입니다)
+    pyinstaller --noconfirm --onefile --windowed --name "ShortformVideoGenerator" --add-data "venv/lib/python*/site-packages/streamlit/frontend:streamlit/frontend" --add-binary "ffmpeg:." app.py
+    ```
+
+3.  **결과**: `dist` 폴더 안에 `ShortformVideoGenerator.app` 파일이 생성됩니다.
