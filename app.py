@@ -5,6 +5,7 @@ import tempfile
 import uuid
 import subprocess
 from streamlit_sortables import sort_items
+import io
 
 # --- 1. 경로 및 기본 설정 ---
 st.set_page_config(page_title="Short-form Video Generator", layout="wide")
@@ -98,7 +99,7 @@ def generate_video(image_paths, mp3_path, output_path, video_duration, transitio
 
         except subprocess.CalledProcessError as e:
             st.error("영상 생성 중 FFmpeg 오류가 발생했습니다. 이미지나 오디오 파일 형식을 확인해주세요.")
-            st.code(f"FFmpeg Error:\n{e.stderr}")
+            st.code(f"FFmpeg Error:\n{e.stderr.decode('utf-8') if hasattr(e.stderr, 'decode') else e.stderr}")
             return False
 
 # --- 3. Streamlit UI 구성 ---
@@ -128,7 +129,7 @@ with cols_upload[0]:
     )
 with cols_upload[1]:
     uploaded_mp3 = st.file_uploader(
-        "배경 음악(MP3)을 업로드하세요.", type=["mp3"]
+        "배경 음악(MP3)을 업로드하세요.", type=["mp3", "m4a"]
     )
 
 if uploaded_images:
@@ -140,26 +141,13 @@ if uploaded_images:
 if st.session_state.uploaded_files:
     st.subheader("🖼️ 업로드된 이미지 (드래그로 순서 변경)")
 
-    # --- 여기부터 로직 수정 ---
-
-    # 1. 파일 이름(문자열)으로만 이루어진 리스트를 생성합니다.
     items_to_sort = [file.name for file in st.session_state.uploaded_files]
-    
-    # 2. 파일 이름을 원래 파일 객체에 연결하기 위한 딕셔너리를 만듭니다.
     file_lookup = {file.name: file for file in st.session_state.uploaded_files}
-
-    # 3. 문자열 리스트를 함수에 전달합니다.
     reordered_filenames = sort_items(items_to_sort, direction='horizontal')
 
-    # 4. 함수가 반환한 정렬된 파일 이름 리스트를 사용하여
-    #    원래 파일 객체의 순서를 다시 맞춥니다.
     if reordered_filenames:
         st.session_state.uploaded_files = [file_lookup[name] for name in reordered_filenames]
 
-    # --- 여기까지 로직 수정 ---
-
-
-    # 10개씩 이미지 갤러리 표시
     cols_per_row = 10
     for i, file in enumerate(st.session_state.uploaded_files):
         if i % cols_per_row == 0:
@@ -180,7 +168,39 @@ with cols_settings[2]:
 
 if uploaded_mp3:
     if st.button("🎧 설정된 음악 구간 미리듣기"):
-        st.audio(uploaded_mp3, start_time=mp3_start_time)
+        with st.spinner("미리듣기 오디오 자르는 중..."):
+            try:
+                # FFmpeg에 파일 경로를 안정적으로 전달하기 위해 임시 파일 사용
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_in:
+                    tmp_in.write(uploaded_mp3.getbuffer())
+                    input_path = tmp_in.name
+
+                # FFmpeg를 사용해 오디오 자르기
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-ss', str(mp3_start_time),
+                    '-i', input_path,
+                    '-t', str(video_duration_sec),
+                    # '-c', 'copy',  <- 이 부분이 원인이었으므로 삭제합니다.
+                    '-f', 'mp3',
+                    '-'  # 결과를 표준 출력(stdout)으로 보냄
+                ]
+
+                # FFmpeg 실행 및 결과(잘린 오디오 데이터)를 변수에 저장
+                result = subprocess.run(cmd, check=True, capture_output=True)
+                clipped_audio_bytes = result.stdout
+
+                # 잘린 오디오 데이터를 st.audio로 재생
+                st.audio(clipped_audio_bytes, format='audio/mp3')
+
+            except subprocess.CalledProcessError as e:
+                st.error("미리듣기 생성에 실패했습니다. FFmpeg 오류가 발생했습니다.")
+                # 오류 발생 시 어떤 에러인지 표시
+                st.code(e.stderr.decode('utf-8') if hasattr(e.stderr, 'decode') else e.stderr)
+            finally:
+                # 임시 파일 정리
+                if 'input_path' in locals() and os.path.exists(input_path):
+                    os.remove(input_path)
 
 st.header("3. 영상 생성")
 if st.button("🚀 영상 생성하기!"):
@@ -201,8 +221,10 @@ if st.button("🚀 영상 생성하기!"):
                 img_path.write_bytes(file.getbuffer())
                 image_paths.append(str(img_path))
 
-            mp3_path = temp_dir_path / "audio.mp3"
-            mp3_path.write_bytes(uploaded_mp3.getbuffer())
+            # mp3 뿐만 아니라 m4a 등 다른 오디오 포맷도 처리 가능하도록 이름 수정
+            audio_suffix = Path(uploaded_mp3.name).suffix
+            audio_path = temp_dir_path / f"audio{audio_suffix}"
+            audio_path.write_bytes(uploaded_mp3.getbuffer())
 
             run_id = str(uuid.uuid4())
             st.session_state.run_id = run_id
@@ -210,7 +232,7 @@ if st.button("🚀 영상 생성하기!"):
             thumb_output_path = output_dir / f"thumb_{run_id}.png"
 
             success = generate_video(
-                image_paths, str(mp3_path), str(video_output_path),
+                image_paths, str(audio_path), str(video_output_path),
                 video_duration_sec, transition_duration_sec, mp3_start_time,
                 progress_bar
             )
