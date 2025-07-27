@@ -6,10 +6,14 @@ import uuid
 import subprocess
 from streamlit_sortables import sort_items
 import io
+import math
 
 # --- 1. 경로 및 기본 설정 ---
 st.set_page_config(page_title="Short-form Video Generator", layout="wide")
 st.title("🏞️ 숏폼 영상 자동 생성기")
+
+# ★★★ 각 이미지의 목표 표시 시간 (초) - 이 값을 조절해 각 이미지의 기본 길이를 설정할 수 있습니다.
+TARGET_IMAGE_DURATION = 1.5
 
 # 스크립트 실행 위치를 기준으로 output 폴더 경로 설정
 try:
@@ -22,21 +26,10 @@ output_dir.mkdir(exist_ok=True)
 
 
 # --- 2. 핵심 기능 함수 (영상 생성 로직) ---
-def generate_video(image_paths, mp3_path, output_path, video_duration, transition_duration, mp3_start_time, progress_bar):
+# generate_video 함수는 이제 image_display_duration를 직접 받도록 수정됩니다.
+def generate_video(image_paths, mp3_path, output_path, video_duration, transition_duration, mp3_start_time, image_display_duration, progress_bar):
     """FFmpeg를 사용하여 이미지와 오디오로 비디오를 생성합니다."""
     num_images = len(image_paths)
-
-    # 비정상적인 설정 값 오류 방지
-    total_transition_time = (num_images - 1) * transition_duration
-    if total_transition_time >= video_duration:
-        st.error(f"오류: 총 영상 길이({video_duration}초)가 총 전환 시간({total_transition_time:.1f}초)보다 짧습니다. 영상 길이를 늘리거나 전환 시간을 줄여주세요.")
-        return False
-
-    # 각 이미지가 단독으로 표시되는 시간 계산
-    image_display_duration = (video_duration - total_transition_time) / num_images
-    if image_display_duration <= 0:
-        st.error(f"오류: 각 이미지가 표시될 시간이 없습니다. 영상 길이를 늘리거나 전환 시간을 줄여주세요.")
-        return False
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -59,6 +52,7 @@ def generate_video(image_paths, mp3_path, output_path, video_duration, transitio
             for i in range(1, num_images):
                 next_stream = f"v{i}"
                 output_stream = f"vt{i}"
+                # 계산된 고정 표시 시간을 사용합니다.
                 offset = image_display_duration + (i - 1) * (image_display_duration + transition_duration)
                 stream_chain += f"[{last_stream}][{next_stream}]xfade=transition=fade:duration={transition_duration}:offset={offset}[{output_stream}];"
                 last_stream = output_stream
@@ -69,6 +63,7 @@ def generate_video(image_paths, mp3_path, output_path, video_duration, transitio
                 'ffmpeg', '-y', *cmd_inputs,
                 '-filter_complex', f"{filter_complex}[{last_stream}]format=yuv420p[video_out]",
                 '-map', '[video_out]',
+                # 최종 영상 길이는 슬라이더 값으로 정확히 잘라냅니다.
                 '-t', str(video_duration),
                 '-vcodec', 'libx264',
                 '-preset', 'veryfast',
@@ -117,7 +112,7 @@ with st.expander("사용법 보기 👀"):
     st.write("""
     1.  **파일 업로드**: 2개 이상의 이미지와 1개의 MP3 파일을 업로드합니다.
     2.  **이미지 순서 편집**: 업로드된 이미지 목록에서 드래그 앤 드롭으로 순서를 바꿀 수 있습니다. **첫 번째 이미지가 썸네일로 사용됩니다.**
-    3.  **영상 설정**: 영상 길이, 전환 효과, 음악 시작 위치를 조절합니다.
+    3.  **영상 설정**: 영상 길이, 전환 효과, 음악 시작 위치를 조절합니다. 영상 길이를 늘리면 이미지가 반복해서 나타납니다.
     4.  **영상 생성하기**: 버튼을 누르면 설정된 순서와 내용으로 영상이 만들어집니다.
     """)
 
@@ -170,58 +165,69 @@ if uploaded_mp3:
     if st.button("🎧 설정된 음악 구간 미리듣기"):
         with st.spinner("미리듣기 오디오 자르는 중..."):
             try:
-                # FFmpeg에 파일 경로를 안정적으로 전달하기 위해 임시 파일 사용
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_in:
                     tmp_in.write(uploaded_mp3.getbuffer())
                     input_path = tmp_in.name
-
-                # FFmpeg를 사용해 오디오 자르기
+                
                 cmd = [
                     'ffmpeg', '-y',
                     '-ss', str(mp3_start_time),
                     '-i', input_path,
                     '-t', str(video_duration_sec),
-                    # '-c', 'copy',  <- 이 부분이 원인이었으므로 삭제합니다.
                     '-f', 'mp3',
-                    '-'  # 결과를 표준 출력(stdout)으로 보냄
+                    '-'
                 ]
-
-                # FFmpeg 실행 및 결과(잘린 오디오 데이터)를 변수에 저장
+                
                 result = subprocess.run(cmd, check=True, capture_output=True)
                 clipped_audio_bytes = result.stdout
-
-                # 잘린 오디오 데이터를 st.audio로 재생
+                
                 st.audio(clipped_audio_bytes, format='audio/mp3')
 
             except subprocess.CalledProcessError as e:
                 st.error("미리듣기 생성에 실패했습니다. FFmpeg 오류가 발생했습니다.")
-                # 오류 발생 시 어떤 에러인지 표시
                 st.code(e.stderr.decode('utf-8') if hasattr(e.stderr, 'decode') else e.stderr)
             finally:
-                # 임시 파일 정리
                 if 'input_path' in locals() and os.path.exists(input_path):
                     os.remove(input_path)
 
 st.header("3. 영상 생성")
 if st.button("🚀 영상 생성하기!"):
-    final_image_order = st.session_state.uploaded_files
+    original_file_order = st.session_state.uploaded_files
     if not uploaded_mp3:
         st.warning("MP3 파일을 업로드해주세요.")
-    elif len(final_image_order) < 2:
+    elif len(original_file_order) < 2:
         st.warning("이미지를 2개 이상 업로드하고 순서를 정해주세요.")
     else:
         progress_bar = st.progress(0, text="준비 중...")
+
+        # --- ★★★ 이미지 반복 로직 시작 ★★★ ---
+        
+        # 1. 반복에 필요한 변수 계산
+        num_original_images = len(original_file_order)
+        # 한 이미지가 전환 효과 포함 차지하는 대략적인 시간
+        time_per_slot = TARGET_IMAGE_DURATION + transition_duration_sec
+        # 필요한 총 이미지 슬롯 개수 계산 (올림 처리)
+        num_total_slots = math.ceil(video_duration_sec / time_per_slot) + 1
+
+        # 2. 필요한 개수만큼 이미지 리스트를 반복하여 새로 생성
+        looped_file_order = []
+        for i in range(num_total_slots):
+            # 나머지 연산(%)을 사용해 순환하는 인덱스 생성
+            looped_file_order.append(original_file_order[i % num_original_images])
+        
+        # --- ★★★ 이미지 반복 로직 끝 ★★★ ---
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
 
             image_paths = []
-            for file in final_image_order:
+            # 반복 생성된 이미지 리스트(looped_file_order)를 사용
+            for file in looped_file_order:
                 unique_name = f"{uuid.uuid4().hex}_{file.name}"
                 img_path = temp_dir_path / unique_name
                 img_path.write_bytes(file.getbuffer())
                 image_paths.append(str(img_path))
 
-            # mp3 뿐만 아니라 m4a 등 다른 오디오 포맷도 처리 가능하도록 이름 수정
             audio_suffix = Path(uploaded_mp3.name).suffix
             audio_path = temp_dir_path / f"audio{audio_suffix}"
             audio_path.write_bytes(uploaded_mp3.getbuffer())
@@ -234,15 +240,20 @@ if st.button("🚀 영상 생성하기!"):
             success = generate_video(
                 image_paths, str(audio_path), str(video_output_path),
                 video_duration_sec, transition_duration_sec, mp3_start_time,
+                TARGET_IMAGE_DURATION, # 고정된 이미지 표시 시간을 전달
                 progress_bar
             )
 
             if success:
                 st.success("영상 생성 완료!")
                 st.session_state.video_path = str(video_output_path)
+                # 썸네일은 반복 리스트가 아닌 원본 리스트의 첫 번째 이미지로 생성
+                first_image_path = Path(temp_dir) / f"{uuid.uuid4().hex}_{original_file_order[0].name}"
+                first_image_path.write_bytes(original_file_order[0].getbuffer())
+                
                 try:
                     subprocess.run([
-                        'ffmpeg', '-y', '-i', image_paths[0],
+                        'ffmpeg', '-y', '-i', str(first_image_path),
                         '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
                         '-vframes', '1', str(thumb_output_path)
                     ], check=True, capture_output=True, text=True, encoding='utf-8')
