@@ -12,7 +12,7 @@ import math
 st.set_page_config(page_title="Short-form Video Generator", layout="wide")
 st.title("🏞️ 숏폼 영상 자동 생성기")
 
-# ★★★ 각 이미지의 목표 표시 시간 (초) - 이 값을 조절해 각 이미지의 기본 길이를 설정할 수 있습니다.
+#  각 이미지의 목표 표시 시간 (초) - 이 값을 조절해 각 이미지의 기본 길이를 설정할 수 있습니다.
 TARGET_IMAGE_DURATION = 1.5
 
 # 스크립트 실행 위치를 기준으로 output 폴더 경로 설정
