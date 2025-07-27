@@ -4,11 +4,13 @@ from pathlib import Path
 import tempfile
 import uuid
 import subprocess
+from streamlit_sortables import sort_items
 
 # --- 1. 경로 및 기본 설정 ---
-st.set_page_config(page_title="Short-form Video Generator", layout="centered")
+st.set_page_config(page_title="Short-form Video Generator", layout="wide")
+st.title("🏞️ 숏폼 영상 자동 생성기")
 
-# 임시 파일 및 출력 디렉토리 설정
+# 스크립트 실행 위치를 기준으로 output 폴더 경로 설정
 try:
     script_dir = Path(__file__).parent
 except NameError:
@@ -18,15 +20,21 @@ output_dir = script_dir / "output"
 output_dir.mkdir(exist_ok=True)
 
 
-# --- 2. 핵심 기능 함수 ---
-def generate_video_with_subprocess(image_paths, mp3_path, output_path, video_duration, transition_duration, mp3_start_time):
-    """
-    [핵심 수정] 3단계 접근법으로 비디오를 안정적으로 생성하는 함수
-    1. 무음 비디오 생성 -> 2. 오디오 트랙 생성 -> 3. 비디오와 오디오 결합
-    """
+# --- 2. 핵심 기능 함수 (영상 생성 로직) ---
+def generate_video(image_paths, mp3_path, output_path, video_duration, transition_duration, mp3_start_time, progress_bar):
+    """FFmpeg를 사용하여 이미지와 오디오로 비디오를 생성합니다."""
     num_images = len(image_paths)
-    if num_images < 2:
-        st.error("오류: 이미지는 2개 이상 필요합니다.")
+
+    # 비정상적인 설정 값 오류 방지
+    total_transition_time = (num_images - 1) * transition_duration
+    if total_transition_time >= video_duration:
+        st.error(f"오류: 총 영상 길이({video_duration}초)가 총 전환 시간({total_transition_time:.1f}초)보다 짧습니다. 영상 길이를 늘리거나 전환 시간을 줄여주세요.")
+        return False
+
+    # 각 이미지가 단독으로 표시되는 시간 계산
+    image_display_duration = (video_duration - total_transition_time) / num_images
+    if image_display_duration <= 0:
+        st.error(f"오류: 각 이미지가 표시될 시간이 없습니다. 영상 길이를 늘리거나 전환 시간을 줄여주세요.")
         return False
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -35,70 +43,68 @@ def generate_video_with_subprocess(image_paths, mp3_path, output_path, video_dur
         final_audio_path = temp_dir_path / "final_audio.aac"
 
         try:
-            # --- 1단계: 무음 비디오 생성 ---
-            filter_complex_video = ""
-            for i, img_path in enumerate(image_paths):
-                filter_complex_video += f"[{i}:v]settb=AVTB,fps=24,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1:color=black[v{i}];"
-            
-            clip_duration = (video_duration + (num_images - 1) * transition_duration) / num_images
-            prev_stream = "[v0]"
-            for i in range(1, num_images):
-                offset = i * (clip_duration - transition_duration)
-                out_stream_name = "[video_out]" if i == num_images - 1 else f"[vt{i}]"
-                filter_complex_video += f"{prev_stream}[v{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}{out_stream_name};"
-                prev_stream = out_stream_name
+            progress_bar.progress(10, text="무음 비디오 생성을 시작합니다...")
 
-            cmd_video = ['ffmpeg', '-y']
+            cmd_inputs = []
             for img_path in image_paths:
-                cmd_video.extend(['-loop', '1', '-i', img_path])
-            cmd_video.extend([
-                '-filter_complex', filter_complex_video,
+                cmd_inputs.extend(['-loop', '1', '-i', img_path])
+
+            filter_complex = ""
+            for i in range(num_images):
+                filter_complex += f"[{i}:v]settb=AVTB,fps=24,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setpts=PTS-STARTPTS[v{i}];"
+
+            stream_chain = ""
+            last_stream = "v0"
+            for i in range(1, num_images):
+                next_stream = f"v{i}"
+                output_stream = f"vt{i}"
+                offset = image_display_duration + (i - 1) * (image_display_duration + transition_duration)
+                stream_chain += f"[{last_stream}][{next_stream}]xfade=transition=fade:duration={transition_duration}:offset={offset}[{output_stream}];"
+                last_stream = output_stream
+
+            filter_complex += stream_chain
+
+            cmd_video = [
+                'ffmpeg', '-y', *cmd_inputs,
+                '-filter_complex', f"{filter_complex}[{last_stream}]format=yuv420p[video_out]",
                 '-map', '[video_out]',
                 '-t', str(video_duration),
                 '-vcodec', 'libx264',
-                '-pix_fmt', 'yuv420p',
                 '-preset', 'veryfast',
                 str(silent_video_path)
-            ])
+            ]
             subprocess.run(cmd_video, check=True, capture_output=True, text=True, encoding='utf-8')
+            progress_bar.progress(40, text="무음 비디오 생성 완료. 오디오를 처리합니다...")
 
-            # --- 2단계: 오디오 트랙 생성 ---
             cmd_audio = [
-                'ffmpeg', '-y',
-                '-i', mp3_path,
-                '-ss', str(mp3_start_time),
-                '-t', str(video_duration),
-                '-acodec', 'aac',
-                '-ar', '44100',
-                '-b:a', '192k',
+                'ffmpeg', '-y', '-i', mp3_path,
+                '-ss', str(mp3_start_time), '-t', str(video_duration),
+                '-acodec', 'aac', '-ar', '44100', '-b:a', '192k',
                 str(final_audio_path)
             ]
             subprocess.run(cmd_audio, check=True, capture_output=True, text=True, encoding='utf-8')
+            progress_bar.progress(70, text="오디오 처리 완료. 최종 영상을 결합합니다...")
 
-            # --- 3단계: 무음 비디오와 오디오 결합 ---
             cmd_combine = [
-                'ffmpeg', '-y',
-                '-i', str(silent_video_path),
-                '-i', str(final_audio_path),
-                '-c:v', 'copy',  # 비디오는 재인코딩 없이 복사
-                '-c:a', 'copy',  # 오디오도 재인코딩 없이 복사
-                '-map', '0:v:0',
-                '-map', '1:a:0',
+                'ffmpeg', '-y', '-i', str(silent_video_path), '-i', str(final_audio_path),
+                '-c:v', 'copy', '-c:a', 'copy',
+                '-map', '0:v:0', '-map', '1:a:0',
                 str(output_path)
             ]
             subprocess.run(cmd_combine, check=True, capture_output=True, text=True, encoding='utf-8')
-            
+            progress_bar.progress(100, text="영상 생성 완료!")
+
             return True
 
         except subprocess.CalledProcessError as e:
-            st.error("영상 생성 중 FFmpeg 오류가 발생했습니다.")
-            st.code(e.stderr) # 에러 로그를 직접 보여줌
+            st.error("영상 생성 중 FFmpeg 오류가 발생했습니다. 이미지나 오디오 파일 형식을 확인해주세요.")
+            st.code(f"FFmpeg Error:\n{e.stderr}")
             return False
 
-
 # --- 3. Streamlit UI 구성 ---
-st.title("🏞️ 숏폼 영상 자동 생성기")
 
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = []
 if 'video_path' not in st.session_state:
     st.session_state.video_path = None
 if 'thumbnail_path' not in st.session_state:
@@ -107,108 +113,143 @@ if 'run_id' not in st.session_state:
     st.session_state.run_id = str(uuid.uuid4())
 
 with st.expander("사용법 보기 👀"):
-    st.write("이미지(2개 이상)와 MP3 파일을 업로드하고 설정을 맞춘 뒤 '영상 생성하기' 버튼을 누르세요.")
+    st.write("""
+    1.  **파일 업로드**: 2개 이상의 이미지와 1개의 MP3 파일을 업로드합니다.
+    2.  **이미지 순서 편집**: 업로드된 이미지 목록에서 드래그 앤 드롭으로 순서를 바꿀 수 있습니다. **첫 번째 이미지가 썸네일로 사용됩니다.**
+    3.  **영상 설정**: 영상 길이, 전환 효과, 음악 시작 위치를 조절합니다.
+    4.  **영상 생성하기**: 버튼을 누르면 설정된 순서와 내용으로 영상이 만들어집니다.
+    """)
 
 st.header("1. 파일 업로드")
-uploaded_images = st.file_uploader(
-    "이미지를 2개 이상 업로드하세요.", type=["png", "jpg", "jpeg"], accept_multiple_files=True
-)
-uploaded_mp3 = st.file_uploader(
-    "배경 음악(MP3)을 업로드하세요.", type=["mp3"]
-)
+cols_upload = st.columns(2)
+with cols_upload[0]:
+    uploaded_images = st.file_uploader(
+        "이미지를 2개 이상 업로드하세요.", type=["png", "jpg", "jpeg"], accept_multiple_files=True
+    )
+with cols_upload[1]:
+    uploaded_mp3 = st.file_uploader(
+        "배경 음악(MP3)을 업로드하세요.", type=["mp3"]
+    )
+
+if uploaded_images:
+    current_files = {f.name: f for f in st.session_state.uploaded_files}
+    for f in uploaded_images:
+        current_files[f.name] = f
+    st.session_state.uploaded_files = list(current_files.values())
+
+if st.session_state.uploaded_files:
+    st.subheader("🖼️ 업로드된 이미지 (드래그로 순서 변경)")
+
+    # --- 여기부터 로직 수정 ---
+
+    # 1. 파일 이름(문자열)으로만 이루어진 리스트를 생성합니다.
+    items_to_sort = [file.name for file in st.session_state.uploaded_files]
+    
+    # 2. 파일 이름을 원래 파일 객체에 연결하기 위한 딕셔너리를 만듭니다.
+    file_lookup = {file.name: file for file in st.session_state.uploaded_files}
+
+    # 3. 문자열 리스트를 함수에 전달합니다.
+    reordered_filenames = sort_items(items_to_sort, direction='horizontal')
+
+    # 4. 함수가 반환한 정렬된 파일 이름 리스트를 사용하여
+    #    원래 파일 객체의 순서를 다시 맞춥니다.
+    if reordered_filenames:
+        st.session_state.uploaded_files = [file_lookup[name] for name in reordered_filenames]
+
+    # --- 여기까지 로직 수정 ---
+
+
+    # 10개씩 이미지 갤러리 표시
+    cols_per_row = 10
+    for i, file in enumerate(st.session_state.uploaded_files):
+        if i % cols_per_row == 0:
+            cols = st.columns(cols_per_row)
+        with cols[i % cols_per_row]:
+            st.image(file, use_container_width=True, caption=f"{i+1}. {file.name[:10]}...")
+            if i == 0:
+                st.info("썸네일", icon="🖼️")
 
 st.header("2. 영상 설정")
-video_duration_sec = st.slider(
-    "전체 영상 길이 (초)", min_value=5, max_value=60, value=15, step=1
-)
-transition_duration_sec = st.slider(
-    "화면 전환 효과 시간 (초)", min_value=0.1, max_value=2.0, value=0.5, step=0.1
-)
-mp3_start_time = st.number_input(
-    "음악 시작 위치 (초)", min_value=0, value=15, step=1
-)
+cols_settings = st.columns(3)
+with cols_settings[0]:
+    video_duration_sec = st.slider("전체 영상 길이 (초)", 5, 60, 15)
+with cols_settings[1]:
+    transition_duration_sec = st.slider("화면 전환 효과 시간 (초)", 0.1, 3.0, 0.5, 0.1)
+with cols_settings[2]:
+    mp3_start_time = st.number_input("음악 시작 위치 (초)", 0, value=15)
 
 if uploaded_mp3:
     if st.button("🎧 설정된 음악 구간 미리듣기"):
-        with st.spinner("미리듣기 생성 중..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_in, \
-                 tempfile.NamedTemporaryFile(delete=False, suffix="_preview.mp3") as temp_out:
-                
-                temp_in.write(uploaded_mp3.getbuffer())
-                input_path = temp_in.name
-                output_path = temp_out.name
-            
-            try:
-                command = [
-                    'ffmpeg', '-y',
-                    '-i', input_path,
-                    '-ss', str(mp3_start_time),
-                    '-t', str(video_duration_sec),
-                    output_path
-                ]
-                subprocess.run(command, check=True, capture_output=True)
-                st.audio(output_path)
-            except subprocess.CalledProcessError as e:
-                st.error("미리듣기 생성에 실패했습니다.")
-                st.code(e.stderr)
-            finally:
-                if os.path.exists(input_path): os.remove(input_path)
-                if os.path.exists(output_path): os.remove(output_path)
+        st.audio(uploaded_mp3, start_time=mp3_start_time)
 
 st.header("3. 영상 생성")
 if st.button("🚀 영상 생성하기!"):
-    if uploaded_images and uploaded_mp3 and len(uploaded_images) >= 2:
-        with st.spinner('영상을 생성 중입니다... 잠시만 기다려주세요.'):
-            # 파일을 임시 디렉토리에 저장하지 않고 바로 BytesIO로 처리 시도
-            with tempfile.TemporaryDirectory() as temp_dir:
-                image_paths = []
-                for file in uploaded_images:
-                    unique_name = f"{uuid.uuid4().hex}_{file.name}"
-                    img_path = Path(temp_dir) / unique_name
-                    img_path.write_bytes(file.getbuffer())
-                    image_paths.append(str(img_path))
-                
-                mp3_path = Path(temp_dir) / "audio.mp3"
-                mp3_path.write_bytes(uploaded_mp3.getbuffer())
+    final_image_order = st.session_state.uploaded_files
+    if not uploaded_mp3:
+        st.warning("MP3 파일을 업로드해주세요.")
+    elif len(final_image_order) < 2:
+        st.warning("이미지를 2개 이상 업로드하고 순서를 정해주세요.")
+    else:
+        progress_bar = st.progress(0, text="준비 중...")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
 
-                run_id = str(uuid.uuid4())
-                st.session_state.run_id = run_id
-                video_output_path = output_dir / f"video_{run_id}.mp4"
-                thumb_output_path = output_dir / f"thumb_{run_id}.png"
+            image_paths = []
+            for file in final_image_order:
+                unique_name = f"{uuid.uuid4().hex}_{file.name}"
+                img_path = temp_dir_path / unique_name
+                img_path.write_bytes(file.getbuffer())
+                image_paths.append(str(img_path))
 
-                success = generate_video_with_subprocess(
-                    image_paths, str(mp3_path), video_output_path,
-                    video_duration_sec, transition_duration_sec, mp3_start_time
+            mp3_path = temp_dir_path / "audio.mp3"
+            mp3_path.write_bytes(uploaded_mp3.getbuffer())
+
+            run_id = str(uuid.uuid4())
+            st.session_state.run_id = run_id
+            video_output_path = output_dir / f"video_{run_id}.mp4"
+            thumb_output_path = output_dir / f"thumb_{run_id}.png"
+
+            success = generate_video(
+                image_paths, str(mp3_path), str(video_output_path),
+                video_duration_sec, transition_duration_sec, mp3_start_time,
+                progress_bar
+            )
+
+            if success:
+                st.success("영상 생성 완료!")
+                st.session_state.video_path = str(video_output_path)
+                try:
+                    subprocess.run([
+                        'ffmpeg', '-y', '-i', image_paths[0],
+                        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black',
+                        '-vframes', '1', str(thumb_output_path)
+                    ], check=True, capture_output=True, text=True, encoding='utf-8')
+                    st.session_state.thumbnail_path = str(thumb_output_path)
+                except subprocess.CalledProcessError:
+                    st.session_state.thumbnail_path = None
+            else:
+                st.session_state.video_path = None
+                st.session_state.thumbnail_path = None
+
+if st.session_state.video_path:
+    st.header("4. 결과 확인 및 다운로드")
+    video_file_path = Path(st.session_state.video_path)
+    thumb_file_path = Path(st.session_state.thumbnail_path) if st.session_state.thumbnail_path else None
+
+    if video_file_path.exists():
+        if thumb_file_path and thumb_file_path.exists():
+            st.image(str(thumb_file_path), caption="생성된 썸네일")
+            with open(thumb_file_path, "rb") as f:
+                st.download_button(
+                    "썸네일 이미지 다운로드 🖼️", data=f.read(),
+                    file_name=f"thumbnail_{st.session_state.run_id}.png", mime="image/png"
                 )
 
-                if success:
-                    subprocess.run([
-                        'ffmpeg', '-y', '-i', str(video_output_path),
-                        '-vframes', '1', str(thumb_output_path)
-                    ], check=True, capture_output=True, text=True)
-                    st.success("영상 생성 완료!")
-                    st.session_state.video_path = str(video_output_path)
-                    st.session_state.thumbnail_path = str(thumb_output_path)
-                else:
-                    st.session_state.video_path = None
-                    st.session_state.thumbnail_path = None
-    else:
-        st.warning("이미지(2개 이상)와 MP3 파일을 모두 업로드해주세요.")
-
-if st.session_state.video_path and st.session_state.thumbnail_path:
-    st.header("4. 결과 확인 및 다운로드")
-    if Path(st.session_state.video_path).exists() and Path(st.session_state.thumbnail_path).exists():
-        st.image(st.session_state.thumbnail_path, caption="생성된 썸네일")
-        with open(st.session_state.thumbnail_path, "rb") as f:
-            st.download_button(
-                "썸네일 이미지 다운로드", data=f.read(),
-                file_name=f"thumbnail_{st.session_state.run_id}.png", mime="image/png"
-            )
         st.markdown("---")
-        st.video(st.session_state.video_path)
-        with open(st.session_state.video_path, "rb") as f:
+        st.video(str(video_file_path))
+        with open(video_file_path, "rb") as f:
             st.download_button(
-                "영상 다운로드", data=f.read(),
+                "영상 다운로드 🎬", data=f.read(),
                 file_name=f"video_{st.session_state.run_id}.mp4", mime="video/mp4"
             )
     else:
