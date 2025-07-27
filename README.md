@@ -94,12 +94,14 @@
 ### 1. 공통 준비
 
 먼저 프로젝트 폴더 구조를 아래와 같이 준비합니다.
-shortform-generation/
-├── libs/
-│   └── streamlit_sortables-0.3.1-py3-none-any.whl
-├── app.py
-└── requirements.txt
-* `app.py`와 `requirements.txt`는 최종 버전으로 준비합니다.
+
+* **`shortform-generation/`** (프로젝트 루트 폴더)
+    * **`libs/`**
+        * `streamlit_sortables-0.3.1-py3-none-any.whl`
+    * `app.py`
+    * `requirements.txt`
+
+* `app.py`와 `requirements.txt`는 이전에 안내된 최종 버전으로 준비합니다.
 * `libs` 폴더를 만들고, 이전에 다운로드한 `streamlit_sortables...whl` 파일을 그 안에 넣습니다.
 
 ### 2. Windows용 `.exe` 만들기
@@ -133,7 +135,7 @@ shortform-generation/
     ```bash
     # 가상 환경 생성 및 활성화, 라이브러리 설치
     python3 -m venv venv
-    source ven/bin/activate
+    source venv/bin/activate
     pip install --upgrade pip
     pip install -r requirements.txt
     pip install pyinstaller
