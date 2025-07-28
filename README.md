@@ -2,6 +2,23 @@
 
 이 프로젝트는 사용자가 업로드한 여러 이미지와 오디오 파일을 조합하여 짧은 형식의 동영상을 자동으로 생성하는 **Streamlit** 기반의 웹 애플리케이션입니다. 드래그 앤 드롭으로 이미지 순서를 직관적으로 편집하고, 영상 길이와 전환 효과 등 다양한 옵션을 직접 설정하여 개성 있는 동영상을 손쉽게 만들 수 있습니다.
 
+## macOS 호환성 업데이트 및 주요 개선사항 (2025-07-28)
+
+Windows에서 정상 작동하던 프로젝트를 macOS 환경에서도 완벽하게 실행하고 빌드할 수 있도록 수정했습니다. 이 과정에서 발생한 다수의 환경 설정 문제와 FFmpeg의 크로스플랫폼 호환성 오류를 해결하고, 영상 생성 로직을 전면 개선하여 안정성을 확보했습니다.
+
+**주요 변경 및 수정 사항:**
+
+*   **macOS 환경설정 문제 해결**
+    *   `requirements.txt`에 하드코딩되어 있던 Windows 절대 경로를 모든 OS에서 작동하는 상대 경로(`./libs/...`)로 수정하여 프로젝트 이식성을 확보했습니다.
+    *   Homebrew를 이용한 FFmpeg 설치 및 터미널 PATH 설정 문제를 해결하여 Mac에서도 FFmpeg 명령어를 정상적으로 사용할 수 있도록 했습니다.
+    *   로컬 의존성 파일인 `streamlit_sortables` (.whl)이 누락된 경우를 대비해 수동 설치 과정을 명확히 했습니다.
+*   **FFmpeg 크로스플랫폼 호환성 오류 수정**
+    *   macOS 환경의 최신 FFmpeg에서 발생하던 고질적인 constant frame rate 및 SAR mismatch 오류를 해결했습니다.
+    *   단순 필터 추가 방식이 아닌, FFmpeg 명령어 구조 자체를 변경하여 근본적인 원인을 해결했습니다.
+*   **영상 생성 로직 리팩토링**
+    *   기존의 불안정한 필터(`tpad`) 로직을 폐기했습니다.
+    *   각 이미지 입력단에서 `-t` 옵션으로 클립 길이를 명확히 지정하고, `fade` 효과를 적용한 뒤 `concat` 필터로 이어 붙이는 방식으로 로직을 전면 재작성하여, 어떤 환경에서도 일관된 결과물을 보장하도록 안정성을 대폭 향상시켰습니다.
+
 ## 주요 기능 ✨
 
 * **다중 파일 업로드**: 여러 이미지 파일(**PNG, JPG, JPEG**)과 하나의 오디오 파일(**MP3, M4A**)을 동시에 업로드할 수 있습니다.
@@ -40,7 +57,7 @@
 
 1.  **저장소 클론:**
     ```bash
-    git clone [https://github.com/Jack-Kim393/shortform-generation-image.git](https://github.com/Jack-Kim393/shortform-generation-image.git)
+    git clone https://github.com/Jack-Kim393/shortform-generation-image.git
     cd shortform-generation-image
     ```
 
@@ -59,6 +76,11 @@
     ```bash
     pip install -r requirements.txt
     ```
+    > **macOS/Linux 사용자 참고:** `requirements.txt`에 포함된 `streamlit_sortables` 라이브러리가 로컬 `.whl` 파일로 지정되어 있습니다. 만약 `pip install -r requirements.txt` 실행 시 이 부분에서 오류가 발생하면, 아래 명령어를 통해 수동으로 먼저 설치한 후 다시 시도해 주세요.
+    > ```bash
+    > pip install libs/streamlit_sortables-0.3.1-py3-none-any.whl
+    > pip install -r requirements.txt
+    > ```
 
 ## 사용 방법
 
@@ -93,7 +115,7 @@
 
 ### 1. 공통 준비
 
-먼저 프로젝트 폴더 구조를 아래와 같이 준비합니다.
+먼저 프로젝트 폴더 구조을 아래와 같이 준비합니다.
 
 * **`shortform-generation/`** (프로젝트 루트 폴더)
     * **`libs/`**
