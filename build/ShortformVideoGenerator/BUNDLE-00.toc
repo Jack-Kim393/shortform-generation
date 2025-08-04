@@ -1,0 +1,3 @@
+([('ShortformVideoGenerator',
+   '/Users/kakaoent/Desktop/my-mac-project/shortform-generation-image/dist/ShortformVideoGenerator',
+   'EXECUTABLE')],)
