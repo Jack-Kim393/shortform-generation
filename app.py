@@ -19,7 +19,7 @@ def get_ffmpeg_path():
     ffmpeg_filename = "ffmpeg.exe" if is_windows else "ffmpeg"
     if getattr(sys, 'frozen', False):
         application_path = os.path.dirname(sys.executable)
-        return os.path.join(application_path, ffmpeg_filename)
+        return os.path.join(application_path, ffmmap_filename)
     else:
         return "ffmpeg"
 
@@ -35,27 +35,26 @@ output_dir = script_dir / "output"
 output_dir.mkdir(exist_ok=True)
 
 # --- 2. 핵심 기능 함수 (영상 생성 로직) ---
-def generate_video(image_paths, audio_paths, output_path, video_duration, transition_duration, mp3_start_time, image_display_duration, progress_bar):
+def generate_video(image_paths, audio_configs, output_path, video_duration, transition_duration, image_display_duration, progress_bar):
     num_images = len(image_paths)
-    num_audios = len(audio_paths)
+    num_audios = len(audio_configs)
     ffmpeg_path = get_ffmpeg_path()
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
         silent_video_path = temp_dir_path / "silent_video.mp4"
-        merged_audio_path = temp_dir_path / "merged_audio.aac"
         final_audio_path = temp_dir_path / "final_audio.aac"
 
         try:
             # --- 1. 무음 비디오 생성 ---
             progress_bar.progress(10, text="무음 비디오 생성을 시작합니다...")
-            cmd_inputs = []
+            cmd_inputs_video = []
             clip_duration = image_display_duration + transition_duration
             for img_path in image_paths:
-                cmd_inputs.extend(['-loop', '1', '-framerate', '24', '-t', str(clip_duration), '-i', str(img_path)])
+                cmd_inputs_video.extend(['-loop', '1', '-framerate', '24', '-t', str(clip_duration), '-i', str(img_path)])
 
             filter_complex_video = ""
-            clip_streams = []
+            clip_streams_video = []
             for i in range(num_images):
                 fade_out_start = image_display_duration
                 filter_complex_video += (
@@ -65,52 +64,46 @@ def generate_video(image_paths, audio_paths, output_path, video_duration, transi
                     f"fade=t=out:st={fade_out_start}:d={transition_duration},"
                     f"setpts=PTS-STARTPTS[v{i}];"
                 )
-                clip_streams.append(f"[v{i}]")
+                clip_streams_video.append(f"[v{i}]")
             
-            filter_complex_video += f"{''.join(clip_streams)}concat=n={num_images}:v=1:a=0[video_out]"
+            filter_complex_video += f"{''.join(clip_streams_video)}concat=n={num_images}:v=1:a=0[video_out]"
 
             cmd_video = [
-                ffmpeg_path, '-y', *cmd_inputs,
+                ffmpeg_path, '-y', *cmd_inputs_video,
                 '-filter_complex', filter_complex_video,
                 '-map', '[video_out]', '-t', str(video_duration), '-vcodec', 'libx264',
                 '-preset', 'veryfast', '-pix_fmt', 'yuv420p', str(silent_video_path)
             ]
             subprocess.run(cmd_video, check=True, capture_output=True, text=True, encoding='utf-8')
             
-            # --- 2. 오디오 병합 ---
-            progress_bar.progress(40, text="무음 비디오 생성 완료. 오디오를 병합합니다...")
-            audio_inputs = []
-            for audio_path in audio_paths:
-                audio_inputs.extend(['-i', str(audio_path)])
+            # --- 2. 오디오 클립 생성 및 병합 ---
+            progress_bar.progress(40, text="오디오 클립을 자르고 병합합니다...")
+            cmd_inputs_audio = []
+            filter_complex_audio = ""
+            audio_streams = []
+
+            for i, config in enumerate(audio_configs):
+                cmd_inputs_audio.extend(['-i', str(config['path'])])
+                filter_complex_audio += f"[{i}:a]atrim=start={config['start']}:duration={config['duration']},asetpts=PTS-STARTPTS[a{i}];"
+                audio_streams.append(f"[a{i}]")
+
+            filter_complex_audio += f"{''.join(audio_streams)}concat=n={num_audios}:v=0:a=1[audio_out]"
             
-            if num_audios > 1:
-                filter_complex_audio = "".join([f"[{i}:a]" for i in range(num_audios)]) + f"concat=n={num_audios}:v=0:a=1[a]"
-                cmd_merge_audio = [
-                    ffmpeg_path, '-y', *audio_inputs,
-                    '-filter_complex', filter_complex_audio,
-                    '-map', '[a]', '-acodec', 'aac', '-ar', '44100', '-b:a', '192k', str(merged_audio_path)
-                ]
-            else: # 오디오가 1개일 경우, 그냥 복사
-                cmd_merge_audio = [
-                    ffmpeg_path, '-y', *audio_inputs,
-                    '-acodec', 'aac', '-ar', '44100', '-b:a', '192k', str(merged_audio_path)
-                ]
-            subprocess.run(cmd_merge_audio, check=True, capture_output=True, text=True, encoding='utf-8')
-
-            # --- 3. 오디오 구간 편집 ---
-            progress_bar.progress(60, text="오디오 병합 완료. 오디오 구간을 편집합니다...")
-            cmd_trim_audio = [
-                ffmpeg_path, '-y', '-i', str(merged_audio_path),
-                '-ss', str(mp3_start_time), '-t', str(video_duration), 
-                '-acodec', 'copy', str(final_audio_path)
+            cmd_audio = [
+                ffmpeg_path, '-y', *cmd_inputs_audio,
+                '-filter_complex', filter_complex_audio,
+                '-map', '[audio_out]', '-acodec', 'aac', '-ar', '44100', '-b:a', '192k',
+                str(final_audio_path)
             ]
-            subprocess.run(cmd_trim_audio, check=True, capture_output=True, text=True, encoding='utf-8')
+            subprocess.run(cmd_audio, check=True, capture_output=True, text=True, encoding='utf-8')
 
-            # --- 4. 최종 영상 결합 ---
+            # --- 3. 최종 영상 결합 ---
             progress_bar.progress(80, text="오디오 처리 완료. 최종 영상을 결합합니다...")
             cmd_combine = [
                 ffmpeg_path, '-y', '-i', str(silent_video_path), '-i', str(final_audio_path),
-                '-c:v', 'copy', '-c:a', 'copy', '-map', '0:v:0', '-map', '1:a:0', str(output_path)
+                '-c:v', 'copy', '-c:a', 'copy', '-map', '0:v:0', '-map', '1:a:0', 
+                '-t', str(video_duration), # 최종 영상 길이 제한
+                str(output_path)
             ]
             subprocess.run(cmd_combine, check=True, capture_output=True, text=True, encoding='utf-8')
             
@@ -122,8 +115,8 @@ def generate_video(image_paths, audio_paths, output_path, video_duration, transi
             return False
 
 # --- 3. Streamlit UI 구성 ---
-if 'uploaded_files' not in st.session_state: st.session_state.uploaded_files = []
-if 'uploaded_audios' not in st.session_state: st.session_state.uploaded_audios = []
+if 'uploaded_images' not in st.session_state: st.session_state.uploaded_images = []
+if 'audio_configs' not in st.session_state: st.session_state.audio_configs = {}
 if 'video_path' not in st.session_state: st.session_state.video_path = None
 if 'thumbnail_path' not in st.session_state: st.session_state.thumbnail_path = None
 if 'run_id' not in st.session_state: st.session_state.run_id = str(uuid.uuid4())
@@ -131,11 +124,11 @@ if 'run_id' not in st.session_state: st.session_state.run_id = str(uuid.uuid4())
 with st.expander("사용법 보기 👀"):
     st.write("""
     1.  **파일 업로드**: 2개 이상의 이미지와 1개 이상의 오디오 파일을 업로드합니다.
-    2.  **순서 편집**: 업로드된 이미지와 오디오 목록에서 드래그 앤 드롭으로 순서를 바꿀 수 있습니다.
-        - **이미지**: 첫 번째 이미지가 썸네일로 사용됩니다.
-        - **오디오**: 설정된 순서대로 합쳐져 배경 음악이 됩니다.
-    3.  **영상 설정**: 영상 길이, 전환 효과, 음악 시작 위치를 조절합니다. 영상 길이를 늘리면 이미지가 반복해서 나타납s니다.
-    4.  **영상 생성하기**: 버튼을 누르면 설정된 순서와 내용으로 영상이 만들어집니다.
+    2.  **순서 및 구간 편집**:
+        - **이미지**: 드래그 앤 드롭으로 순서를 바꿀 수 있습니다. 첫 번째 이미지가 썸네일로 사용됩니다.
+        - **오디오**: 드래그 앤 드롭으로 순서를 바꾸고, 각 음원의 `시작(초)`과 `사용할 길이(초)`를 설정합니다.
+    3.  **영상 설정**: 영상 길이, 전환 효과를 조절합니다.
+    4.  **영상 생성하기**: 버튼을 누르면 설정된 내용으로 영상이 만들어집니다.
     """)
 
 st.header("1. 파일 업로드")
@@ -147,89 +140,95 @@ with cols_upload[1]:
 
 # 이미지 파일 관리
 if uploaded_images:
-    current_files = {f.name: f for f in st.session_state.uploaded_files}
+    current_files = {f.name: f for f in st.session_state.uploaded_images}
     for f in uploaded_images: current_files[f.name] = f
-    st.session_state.uploaded_files = list(current_files.values())
+    st.session_state.uploaded_images = list(current_files.values())
 
-# 오디오 파일 관리
+# 오디오 파일 및 설정 관리
 if uploaded_audios:
-    current_audios = {f.name: f for f in st.session_state.uploaded_audios}
-    for f in uploaded_audios: current_audios[f.name] = f
-    st.session_state.uploaded_audios = list(current_audios.values())
+    new_audio_configs = st.session_state.audio_configs.copy()
+    for f in uploaded_audios:
+        if f.name not in new_audio_configs:
+            new_audio_configs[f.name] = {'file': f, 'start': 0, 'duration': 5.0}
+    st.session_state.audio_configs = new_audio_configs
 
 # 업로드된 이미지 순서 편집 UI
-if st.session_state.uploaded_files:
+if st.session_state.uploaded_images:
     st.subheader("🖼️ 업로드된 이미지 (드래그로 순서 변경)")
-    items_to_sort = [{'header': f"{i+1}. {file.name}", 'img': file} for i, file in enumerate(st.session_state.uploaded_files)]
+    items_to_sort = [file.name for file in st.session_state.uploaded_images]
+    file_lookup = {file.name: file for file in st.session_state.uploaded_images}
     
-    reordered_items = sort_items(items_to_sort, direction='horizontal')
+    reordered_filenames = sort_items(items_to_sort, direction='horizontal')
     
-    if reordered_items:
-        st.session_state.uploaded_files = [item['img'] for item in reordered_items]
+    if reordered_filenames:
+        st.session_state.uploaded_images = [file_lookup[name] for name in reordered_filenames]
 
     cols_per_row = 10
-    for i, file in enumerate(st.session_state.uploaded_files):
+    for i, file in enumerate(st.session_state.uploaded_images):
         if i % cols_per_row == 0: cols = st.columns(cols_per_row)
         with cols[i % cols_per_row]:
             st.image(file, use_container_width=True, caption=f"{i+1}. {file.name[:10]}...")
             if i == 0: st.info("썸네일", icon="🖼️")
 
-# 업로드된 오디오 순서 편집 UI
-if st.session_state.uploaded_audios:
-    st.subheader("🎵 업로드된 오디오 (드래그로 순서 변경)")
-    audio_items_to_sort = [file.name for file in st.session_state.uploaded_audios]
-    audio_lookup = {file.name: file for file in st.session_state.uploaded_audios}
+# 업로드된 오디오 순서 및 구간 편집 UI
+if st.session_state.audio_configs:
+    st.subheader("🎵 업로드된 오디오 (드래그 및 구간 설정)")
     
-    reordered_audio_filenames = sort_items(audio_items_to_sort, direction='vertical')
+    audio_filenames_to_sort = list(st.session_state.audio_configs.keys())
+    reordered_audio_filenames = sort_items(audio_filenames_to_sort, direction='vertical')
     
     if reordered_audio_filenames:
-        st.session_state.uploaded_audios = [audio_lookup[name] for name in reordered_audio_filenames]
-    
-    for i, file in enumerate(st.session_state.uploaded_audios):
-        st.markdown(f"**{i+1}순위**: {file.name}")
+        st.session_state.audio_configs = {name: st.session_state.audio_configs[name] for name in reordered_audio_filenames}
 
+    for i, (name, config) in enumerate(st.session_state.audio_configs.items()):
+        cols = st.columns([4, 2, 2])
+        with cols[0]:
+            st.markdown(f"**{i+1}순위**: {name}")
+        with cols[1]:
+            config['start'] = st.number_input("시작(초)", min_value=0, value=config['start'], key=f"start_{name}")
+        with cols[2]:
+            config['duration'] = st.number_input("사용할 길이(초)", min_value=0.1, value=config['duration'], step=0.1, key=f"duration_{name}")
 
 st.header("2. 영상 설정")
-cols_settings = st.columns(3)
-with cols_settings[0]: video_duration_sec = st.slider("전체 영상 길이 (초)", 5, 60, 15)
+cols_settings = st.columns(2)
+with cols_settings[0]: video_duration_sec = st.slider("전체 영상 길이 (초)", 5, 180, 15)
 with cols_settings[1]: transition_duration_sec = st.slider("화면 전환 효과 시간 (초)", 0.1, 3.0, 0.5, 0.1)
-with cols_settings[2]: mp3_start_time = st.number_input("음악 시작 위치 (초)", 0, value=15)
 
-if st.session_state.uploaded_audios:
+if st.session_state.audio_configs:
     if st.button("🎧 설정된 음악 구간 미리듣기"):
         with st.spinner("미리듣기 오디오 생성 중..."):
             try:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_dir_path = Path(temp_dir)
-                    audio_paths = []
-                    for audio_file in st.session_state.uploaded_audios:
-                        audio_path = temp_dir_path / audio_file.name
-                        audio_path.write_bytes(audio_file.getbuffer())
-                        audio_paths.append(str(audio_path))
+                    
+                    audio_configs_for_preview = []
+                    for name, config in st.session_state.audio_configs.items():
+                        temp_audio_path = temp_dir_path / name
+                        temp_audio_path.write_bytes(config['file'].getbuffer())
+                        audio_configs_for_preview.append({
+                            'path': str(temp_audio_path),
+                            'start': config['start'],
+                            'duration': config['duration']
+                        })
 
-                    merged_audio_path = temp_dir_path / "merged.mp3"
                     ffmpeg_path = get_ffmpeg_path()
+                    cmd_inputs_audio = []
+                    filter_complex_audio = ""
+                    audio_streams = []
 
-                    # 오디오 병합
-                    audio_inputs = []
-                    for path in audio_paths:
-                        audio_inputs.extend(['-i', path])
-                    
-                    if len(audio_paths) > 1:
-                        filter_complex = "".join([f"[{i}:a]" for i in range(len(audio_paths))]) + f"concat=n={len(audio_paths)}:v=0:a=1[a]"
-                        cmd_merge = [ffmpeg_path, '-y', *audio_inputs, '-filter_complex', filter_complex, '-map', '[a]', str(merged_audio_path)]
-                    else:
-                        cmd_merge = [ffmpeg_path, '-y', *audio_inputs, '-acodec', 'copy', str(merged_audio_path)]
-                    
-                    subprocess.run(cmd_merge, check=True, capture_output=True)
+                    for i, config in enumerate(audio_configs_for_preview):
+                        cmd_inputs_audio.extend(['-i', config['path']])
+                        filter_complex_audio += f"[{i}:a]atrim=start={config['start']}:duration={config['duration']},asetpts=PTS-STARTPTS[a{i}];"
+                        audio_streams.append(f"[a{i}]")
 
-                    # 구간 자르기
-                    cmd_trim = [
-                        ffmpeg_path, '-y', '-ss', str(mp3_start_time),
-                        '-i', str(merged_audio_path), '-t', str(video_duration_sec),
-                        '-f', 'mp3', '-'
+                    filter_complex_audio += f"{''.join(audio_streams)}concat=n={len(audio_streams)}:v=0:a=1[audio_out]"
+                    
+                    cmd = [
+                        ffmpeg_path, '-y', *cmd_inputs_audio,
+                        '-filter_complex', filter_complex_audio,
+                        '-map', '[audio_out]', '-f', 'mp3', '-'
                     ]
-                    result = subprocess.run(cmd_trim, check=True, capture_output=True)
+                    result = subprocess.run(cmd, check=True, capture_output=True)
                     st.audio(result.stdout, format='audio/mp3')
 
             except subprocess.CalledProcessError as e:
@@ -238,10 +237,10 @@ if st.session_state.uploaded_audios:
 
 st.header("3. 영상 생성")
 if st.button("🚀 영상 생성하기!"):
-    image_order = st.session_state.uploaded_files
-    audio_order = st.session_state.uploaded_audios
+    image_order = st.session_state.uploaded_images
+    audio_configs = st.session_state.audio_configs
 
-    if not audio_order: st.warning("오디오 파일을 1개 이상 업로드해주세요.")
+    if not audio_configs: st.warning("오디오 파일을 1개 이상 업로드해주세요.")
     elif len(image_order) < 2: st.warning("이미지를 2개 이상 업로드하고 순서를 정해주세요.")
     else:
         progress_bar = st.progress(0, text="준비 중...")
@@ -252,7 +251,6 @@ if st.button("🚀 영상 생성하기!"):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
             
-            # 이미지 임시 파일 저장
             image_paths = []
             for file in looped_file_order:
                 unique_name = f"{uuid.uuid4().hex}_{file.name}"
@@ -260,13 +258,15 @@ if st.button("🚀 영상 생성하기!"):
                 img_path.write_bytes(file.getbuffer())
                 image_paths.append(img_path)
 
-            # 오디오 임시 파일 저장
-            audio_paths = []
-            for file in audio_order:
-                unique_name = f"{uuid.uuid4().hex}_{file.name}"
-                audio_path = temp_dir_path / unique_name
-                audio_path.write_bytes(file.getbuffer())
-                audio_paths.append(audio_path)
+            audio_configs_for_generation = []
+            for name, config in audio_configs.items():
+                temp_audio_path = temp_dir_path / name
+                temp_audio_path.write_bytes(config['file'].getbuffer())
+                audio_configs_for_generation.append({
+                    'path': str(temp_audio_path),
+                    'start': config['start'],
+                    'duration': config['duration']
+                })
 
             run_id = str(uuid.uuid4())
             st.session_state.run_id = run_id
@@ -274,8 +274,8 @@ if st.button("🚀 영상 생성하기!"):
             thumb_output_path = output_dir / f"thumb_{run_id}.png"
             
             success = generate_video(
-                image_paths, audio_paths, str(video_output_path),
-                video_duration_sec, transition_duration_sec, mp3_start_time,
+                image_paths, audio_configs_for_generation, str(video_output_path),
+                video_duration_sec, transition_duration_sec,
                 TARGET_IMAGE_DURATION, progress_bar
             )
 
@@ -283,7 +283,6 @@ if st.button("🚀 영상 생성하기!"):
                 st.success("영상 생성 완료!")
                 st.session_state.video_path = str(video_output_path)
                 
-                # 썸네일 생성
                 first_image_path = temp_dir_path / f"{uuid.uuid4().hex}_{image_order[0].name}"
                 first_image_path.write_bytes(image_order[0].getbuffer())
                 try:
@@ -327,5 +326,3 @@ try:
     st.sidebar.code(result.stdout.splitlines()[0])
 except (subprocess.CalledProcessError, FileNotFoundError):
     st.sidebar.error("FFmpeg를 찾을 수 없거나 실행할 수 없습니다. 시스템에 설치하고 PATH에 추가해주세요.")
-st.sidebar.markdown("[GitHub 저장소](https://github.com/Jack-Kim393/shortform-generation-image)")
-st.sidebar.markdown("[개발자 블로그](https://jack-kim.com)")
