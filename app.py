@@ -47,7 +47,7 @@ def generate_video(image_paths, audio_configs, output_path, video_duration, tran
 
         try:
             # --- 1. 무음 비디오 생성 ---
-            progress_bar.progress(10, text="무음 비디오 생성을 시작합니다...")
+            progress_bar.progress(10, text="숏폼 비디오 생성을 시작합니다...")
             cmd_inputs_video = []
             clip_duration = image_display_duration + transition_duration
             for img_path in image_paths:
@@ -149,8 +149,13 @@ if uploaded_audios:
     new_audio_configs = st.session_state.audio_configs.copy()
     for f in uploaded_audios:
         if f.name not in new_audio_configs:
-            new_audio_configs[f.name] = {'file': f, 'start': 0, 'duration': 5.0}
+            new_audio_configs[f.name] = {'file': f, 'start': 15, 'duration': 5.0}
     st.session_state.audio_configs = new_audio_configs
+
+st.header("2. 영상 설정")
+cols_settings = st.columns(2)
+with cols_settings[0]: video_duration_sec = st.slider("전체 영상 길이 (초)", 5, 180, 15)
+with cols_settings[1]: transition_duration_sec = st.slider("화면 전환 효과 시간 (초)", 0.1, 3.0, 0.5, 0.1)
 
 # 업로드된 이미지 순서 편집 UI
 if st.session_state.uploaded_images:
@@ -170,6 +175,18 @@ if st.session_state.uploaded_images:
             st.image(file, use_container_width=True, caption=f"{i+1}. {file.name[:10]}...")
             if i == 0: st.info("썸네일", icon="🖼️")
 
+    # 이미지 타임라인 표시
+    st.subheader("📊 이미지 타임라인")
+    timeline_cols = st.columns(4)
+    current_time = 0.0
+    image_duration_no_transition = TARGET_IMAGE_DURATION
+    for i, file in enumerate(st.session_state.uploaded_images):
+        start_time = current_time
+        end_time = start_time + image_duration_no_transition
+        with timeline_cols[i % 4]:
+            st.metric(label=f"{i+1}. {file.name[:15]}...", value=f"{start_time:.1f}s - {end_time:.1f}s")
+        current_time = end_time - transition_duration_sec # 다음 이미지는 전환 시간만큼 겹침
+
 # 업로드된 오디오 순서 및 구간 편집 UI
 if st.session_state.audio_configs:
     st.subheader("🎵 업로드된 오디오 (드래그 및 구간 설정)")
@@ -188,11 +205,6 @@ if st.session_state.audio_configs:
             config['start'] = st.number_input("시작(초)", min_value=0, value=config['start'], key=f"start_{name}")
         with cols[2]:
             config['duration'] = st.number_input("사용할 길이(초)", min_value=0.1, value=config['duration'], step=0.1, key=f"duration_{name}")
-
-st.header("2. 영상 설정")
-cols_settings = st.columns(2)
-with cols_settings[0]: video_duration_sec = st.slider("전체 영상 길이 (초)", 5, 180, 15)
-with cols_settings[1]: transition_duration_sec = st.slider("화면 전환 효과 시간 (초)", 0.1, 3.0, 0.5, 0.1)
 
 if st.session_state.audio_configs:
     if st.button("🎧 설정된 음악 구간 미리듣기"):
