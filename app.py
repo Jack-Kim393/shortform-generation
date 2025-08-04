@@ -169,23 +169,17 @@ if st.session_state.uploaded_images:
         st.session_state.uploaded_images = [file_lookup[name] for name in reordered_filenames]
 
     cols_per_row = 10
+    current_time = 0.0
+    image_duration_no_transition = TARGET_IMAGE_DURATION
     for i, file in enumerate(st.session_state.uploaded_images):
         if i % cols_per_row == 0: cols = st.columns(cols_per_row)
         with cols[i % cols_per_row]:
             st.image(file, use_container_width=True, caption=f"{i+1}. {file.name[:10]}...")
+            start_time = current_time
+            end_time = start_time + image_duration_no_transition
+            st.caption(f"{start_time:.1f}s - {end_time:.1f}s")
             if i == 0: st.info("썸네일", icon="🖼️")
-
-    # 이미지 타임라인 표시
-    st.subheader("📊 이미지 타임라인")
-    timeline_cols = st.columns(4)
-    current_time = 0.0
-    image_duration_no_transition = TARGET_IMAGE_DURATION
-    for i, file in enumerate(st.session_state.uploaded_images):
-        start_time = current_time
-        end_time = start_time + image_duration_no_transition
-        with timeline_cols[i % 4]:
-            st.metric(label=f"{i+1}. {file.name[:15]}...", value=f"{start_time:.1f}s - {end_time:.1f}s")
-        current_time = end_time - transition_duration_sec # 다음 이미지는 전환 시간만큼 겹침
+        current_time = end_time - transition_duration_sec
 
 # 업로드된 오디오 순서 및 구간 편집 UI
 if st.session_state.audio_configs:
