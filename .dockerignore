@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Virtual Environment
+venv
+.venv
+
+# Build & Distribution artifacts
+build/
+dist/
+*.spec
+
+# IDE & Editor specific
+.idea/
+.vscode/
+*.code-workspace
+
+# macOS specific
+.DS_Store
+
+# Logs & Output
+log.txt
+output/
+thumbnail/
+
+# Local Development files
+start.bat
+start.command

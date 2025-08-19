@@ -83,6 +83,31 @@ Windows에서 정상 작동하던 프로젝트를 macOS 환경에서도 완벽�
     > pip install -r requirements.txt
     > ```
 
+## Docker로 실행하기 (Running with Docker)
+
+이 애플리케이션은 Docker 컨테이너로도 실행할 수 있습니다. 아래 안내에 따라 이미지를 받고 실행하세요.
+
+### 1. Docker 이미지 다운로드
+
+Docker Hub에 있는 이미지를 내려받습니다.
+
+```bash
+docker pull jack0399/shortform-generator:latest
+```
+
+### 2. Docker 컨테이너 실행
+
+아래 명령어를 실행하여 애플리케이션을 시작합니다.
+
+*   `-p 8501:8501`: 로컬 컴퓨터의 8501 포트와 컨테이너의 8501 포트를 연결합니다.
+*   `-v $(pwd)/output:/app/output`: 로컬의 `output` 폴더를 컨테이너의 `/app/output` 폴더에 연결(마운트)합니다. 이를 통해 영상 생성 결과물이 로컬 컴퓨터의 `output` 폴더에 저장됩니다.
+
+```bash
+docker run -p 8501:8501 -v $(pwd)/output:/app/output jack0399/shortform-generator:latest
+```
+
+이제 웹 브라우저에서 `http://localhost:8501` 주소로 접속하여 애플리케이션을 사용할 수 있습니다.
+
 ## 사용 방법
 
 1.  **애플리케이션 실행:**
